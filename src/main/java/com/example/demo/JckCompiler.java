@@ -9,7 +9,7 @@ import java.util.UUID;
 import java.util.regex.*;
 
 @RestController
-@RequestMapping("/jck/compiler")
+@RequestMapping("/jck compiler")
 public class JckCompiler {
 
     @PostMapping
