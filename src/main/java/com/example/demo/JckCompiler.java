@@ -1,82 +1,83 @@
 package com.example.demo;
 
-
 import org.springframework.web.bind.annotation.*;
-import javax.tools.JavaCompiler;
-import javax.tools.ToolProvider;
 import java.io.*;
 import java.util.UUID;
 import java.util.regex.*;
+import java.util.concurrent.TimeUnit;
 
 @RestController
-@RequestMapping("/jck compiler")
+@RequestMapping("/compile")
+@CrossOrigin
 public class JckCompiler {
 
     @PostMapping
-    public String compileAndRun(@RequestBody String code) throws IOException {
-        // Extract original class name
+    public String compileAndRun(@RequestBody CodeRequest request) throws Exception {
+
+        String code = request.code;
+        String input = request.input == null ? "" : request.input;
+
         String oldClassName = extractClassName(code);
-        if (oldClassName == null) {
-            return "No class found in code!";
-        }
+        if (oldClassName == null) return "No class found in code!";
 
-        // Generate random class name to avoid conflicts
-        String newClassName = "Main" + UUID.randomUUID().toString().replace("-", "").substring(0, 6);
-        String javaFileName = newClassName + ".java";
-        String classFileName = newClassName + ".class";
-
-        // Replace class name in code
+        String newClassName = "Main" + UUID.randomUUID().toString().substring(0,6);
         code = code.replaceFirst("class\\s+" + oldClassName, "class " + newClassName);
 
-        // Write modified code to .java file
-        try (FileWriter writer = new FileWriter(javaFileName)) {
+        File javaFile = new File(newClassName + ".java");
+        try (FileWriter writer = new FileWriter(javaFile)) {
             writer.write(code);
         }
 
-        // Compile the .java file
-        JavaCompiler compiler = ToolProvider.getSystemJavaCompiler();
-        int result = compiler.run(null, null, null, javaFileName);
-        if (result != 0) {
-            deleteFile(javaFileName); // Clean up on failure
-            return "Compilation failed";
+        /// COMPILE
+        Process compile = new ProcessBuilder("javac", javaFile.getName()).start();
+        String compileError = readStream(compile.getErrorStream());
+
+        if (!compileError.isEmpty()) {
+            delete(javaFile);
+            return compileError;
         }
 
-        // Run the compiled class
-        ProcessBuilder pb = new ProcessBuilder("java", newClassName);
-        pb.redirectErrorStream(true);
-        Process process = pb.start();
+        /// RUN PROGRAM
+        Process process = new ProcessBuilder("java", newClassName).start();
 
-        // Read output from execution
-        BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
-        StringBuilder output = new StringBuilder();
+        BufferedWriter writer =
+                new BufferedWriter(new OutputStreamWriter(process.getOutputStream()));
+        writer.write(input);
+        writer.flush();
+        writer.close();
+
+        boolean finished = process.waitFor(5, TimeUnit.SECONDS);
+        if (!finished) {
+            process.destroyForcibly();
+            delete(javaFile);
+            delete(new File(newClassName + ".class"));
+            return "Time Limit Exceeded";
+        }
+
+        String output = readStream(process.getInputStream());
+        String error = readStream(process.getErrorStream());
+
+        delete(javaFile);
+        delete(new File(newClassName + ".class"));
+
+        return error.isEmpty() ? output : error;
+    }
+
+    private String readStream(InputStream is) throws IOException {
+        BufferedReader br = new BufferedReader(new InputStreamReader(is));
+        StringBuilder sb = new StringBuilder();
         String line;
-        while ((line = reader.readLine()) != null) {
-            output.append(line).append("\n");
-        }
-
-        // Clean up generated files
-        deleteFile(javaFileName);
-        deleteFile(classFileName);
-
-        return output.toString();
+        while((line = br.readLine()) != null)
+            sb.append(line).append("\n");
+        return sb.toString();
     }
 
-    // ✅ Helper: Extract the first class name from Java code
     private String extractClassName(String code) {
-        Pattern pattern = Pattern.compile("class\\s+(\\w+)");
-        Matcher matcher = pattern.matcher(code);
-        if (matcher.find()) {
-            return matcher.group(1);
-        }
-        return null;
+        Matcher m = Pattern.compile("class\\s+(\\w+)").matcher(code);
+        return m.find() ? m.group(1) : null;
     }
 
-    // ✅ Helper: Delete file if it exists
-    private void deleteFile(String fileName) {
-        File file = new File(fileName);
-        if (file.exists()) {
-            file.delete();
-        }
+    private void delete(File f) {
+        if (f.exists()) f.delete();
     }
 }
-
